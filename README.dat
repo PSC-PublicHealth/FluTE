@@ -1,0 +1,65 @@
+Input .dat files can be unpacked from the bz2 compressed archive dat.tar.bz2
+
+After uppacking, the following files should be present in the working directory:
+
+
+MD5(la-employment.dat)= cd20378dda902f171a03c4432825555b
+MD5(la-tracts.dat)= 74416f5ceacfa58849735f374f0a5610
+MD5(la-wf.dat)= 97b375f3e8638626cc9557b90caa5bf3
+MD5(one-employment.dat)= 5dbf42acf3842f77a23bb50e167e5c7d
+MD5(one-tracts.dat)= a080a3ca3310a18fda5f36be21524674
+MD5(one-wf.dat)= d41d8cd98f00b204e9800998ecf8427e
+MD5(seattle-employment.dat)= 7cdf60ed1d019277d0709b557666c181
+MD5(seattle-tracts.dat)= e3997fe5ab0b7fe592127173f0a61f99
+MD5(seattle-wf.dat)= 475c3e306ec4da11346ea27da6a91cf8
+MD5(usa-employment.dat)= 51739e36b905d4e7369b42209dca1b88
+MD5(usa-tracts.dat)= 7cf528456097d922b859e39540897577
+MD5(usa-wf-01.dat)= 85576c7938616a8b39d01f6ebc2cef19
+MD5(usa-wf-04.dat)= e065623061bbccd8d23086977f958698
+MD5(usa-wf-05.dat)= 9ff3129056d5712d31ff4df11170fc65
+MD5(usa-wf-06.dat)= abf0b1f1031f50150686e7c798ef7ae2
+MD5(usa-wf-08.dat)= df8ba81bf03eb3a3a5d9247d0c7b1883
+MD5(usa-wf-09.dat)= d067e0f6f89a5bd28c6f79b253619284
+MD5(usa-wf-10.dat)= 0096fc8b08836e4c9e19a8513b2dcb1d
+MD5(usa-wf-11.dat)= ad4ba0f9dd09fa27084b88bd3da71793
+MD5(usa-wf-12.dat)= cb8f57d97bbf4ec3c095b67c0a32a39a
+MD5(usa-wf-13.dat)= 9aa3a19c95b1f60e1b6067efa77f656b
+MD5(usa-wf-16.dat)= 293770ceda04e0636e78aa45cb2c7c6e
+MD5(usa-wf-17.dat)= 7fe0a5ff84dfc3c17e46407d46445e85
+MD5(usa-wf-18.dat)= 2cdadcd46def68931c322588957980bd
+MD5(usa-wf-19.dat)= 27d33c2bc17e6dfcd19b321c21ff3d83
+MD5(usa-wf-20.dat)= 6d9b9f7dfb1691195ba0b5d65e170620
+MD5(usa-wf-21.dat)= 16a16002514fbeec645428e79f898405
+MD5(usa-wf-22.dat)= 448a5a50e0a80a33ecc25ab11ac9992a
+MD5(usa-wf-23.dat)= 60a80cbebaa0159d44c81f73921b9f91
+MD5(usa-wf-24.dat)= 3a0463d5d791347575ef5f22548351d6
+MD5(usa-wf-25.dat)= e6e9faae98cca28f586bc553e92d1bfd
+MD5(usa-wf-26.dat)= 58fa67e4309b38146485272adff0190c
+MD5(usa-wf-27.dat)= 8d4e66cffae743d53efa2c3e8fb90a26
+MD5(usa-wf-28.dat)= 8a13157975166771eb7be7c41ca9c0b9
+MD5(usa-wf-29.dat)= 3fd1f8565f82517a658599c1c3834b1e
+MD5(usa-wf-30.dat)= 59bf5f8c2d74682bfb7f7e6db5f80af2
+MD5(usa-wf-31.dat)= 7acf9c1b8944a49f726d59610576fe82
+MD5(usa-wf-32.dat)= 2ae44e99b41b574465624e8503cae1a7
+MD5(usa-wf-33.dat)= 89f9964647f15c8df01162e9a59edc20
+MD5(usa-wf-34.dat)= 676b0a93d4ea6d0f45c0e2e876cb1a69
+MD5(usa-wf-35.dat)= 432b6c8b8f4123236b52a4de1022d803
+MD5(usa-wf-36.dat)= c33b9ccc5b4c04c66335f99e84774f55
+MD5(usa-wf-37.dat)= 2be5d2d3493552be57d61fa902d2eb29
+MD5(usa-wf-38.dat)= 35d374bc3f020c384345694ea0026851
+MD5(usa-wf-39.dat)= 3cbdf3e09e402b5d6f815f57d2578140
+MD5(usa-wf-40.dat)= eea5f97176d804173552b3df7cf9e099
+MD5(usa-wf-41.dat)= d1a65a86075b9d41f2095521e918e8ca
+MD5(usa-wf-42.dat)= 9a97167e2b0052441488bb785867f8b7
+MD5(usa-wf-44.dat)= dca88fb387240b2dbc61c0bfc8bc91bb
+MD5(usa-wf-45.dat)= f5f6ace6ecaa937d826bff7d2d5ef630
+MD5(usa-wf-46.dat)= a9d087375d257c7c1c9037b617d673f7
+MD5(usa-wf-47.dat)= 98067b2765a281efd8180dab4862231a
+MD5(usa-wf-48.dat)= 357a9283243322364596c296ae4385cb
+MD5(usa-wf-49.dat)= 0b0f3000a92afe4f88e3e664b6870d27
+MD5(usa-wf-50.dat)= 8dfda3e6d7313c4ac1ecedcca857ad50
+MD5(usa-wf-51.dat)= 961a3ce9341f76e5aec5734631a0802e
+MD5(usa-wf-53.dat)= db43f8a51e21a60b9597438d5da01377
+MD5(usa-wf-54.dat)= a0a4d5773f7dfcf7853c77d32b62a6f9
+MD5(usa-wf-55.dat)= 0c0943518624c7062399ba667eddfd9b
+MD5(usa-wf-56.dat)= b69f2571692acf92aca92e40a028641c

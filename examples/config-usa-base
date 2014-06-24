@@ -1,0 +1,10 @@
+# US with 70% pre-vaccination (requires mpiflute)
+label usa
+R0 1.6
+seed 1
+datafile usa
+logfile 4
+summary 4
+travel 1
+seedairports 2
+seedinfecteddaily 1

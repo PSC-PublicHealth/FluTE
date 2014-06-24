@@ -1,0 +1,58 @@
+Got 34 processors.
+[compute-0-12.local:06238] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+[compute-0-1.local:05988] Error in mx_open_endpoint (error Busy)
+[compute-0-1.local:05988] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+[compute-0-12.local:06235] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+[compute-0-12.local:06237] Error in mx_open_endpoint (error Busy)
+[compute-0-12.local:06237] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+[compute-0-1.local:05986] Error in mx_open_endpoint (error Busy)
+[compute-0-1.local:05986] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+[compute-0-1.local:05989] Error in mx_open_endpoint (error Busy)
+[compute-0-1.local:05989] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+[compute-0-5.local:06023] Error in mx_open_endpoint (error Busy)
+[compute-0-5.local:06023] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+[compute-0-5.local:06024] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+[compute-0-5.local:06027] Error in mx_open_endpoint (error Busy)
+[compute-0-5.local:06025] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+[compute-0-21.local:06157] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+[compute-0-21.local:06152] mca_btl_mx_init: mx_open_endpoint() failed with status=20
+FluTE version 1.13
+Parameter set: usa
+  usa population and workflow data
+  1.6 read in for R0
+   interpolated beta is 0.273963
+2 has 7 tracts and 17 communities.
+15 has 1580 tracts and 2998 communities.
+20 has 1815 tracts and 3378 communities.
+25 has 1674 tracts and 3350 communities.
+11 has 1940 tracts and 3768 communities.
+33 has 1906 tracts and 3857 communities.
+12 has 1847 tracts and 3781 communities.
+18 has 1778 tracts and 3645 communities.
+28 has 1731 tracts and 3876 communities.
+10 has 1807 tracts and 3890 communities.
+0 has 1891 tracts and 4121 communities.
+23 has 1684 tracts and 3474 communities.
+32 has 1907 tracts and 4160 communities.
+26 has 2026 tracts and 4006 communities.
+13 has 1875 tracts and 3949 communities.
+17 has 1905 tracts and 4088 communities.
+24 has 2080 tracts and 4233 communities.
+9 has 1895 tracts and 4131 communities.
+16 has 2228 tracts and 4223 communities.
+29 has 1739 tracts and 4172 communities.
+14 has 2066 tracts and 4451 communities.
+1 has 1915 tracts and 4497 communities.
+19 has 1934 tracts and 4174 communities.
+27 has 2049 tracts and 4435 communities.
+5 has 1985 tracts and 4239 communities.
+21 has 2076 tracts and 4325 communities.
+31 has 2065 tracts and 4850 communities.
+6 has 1875 tracts and 4458 communities.
+22 has 1917 tracts and 4490 communities.
+4 has 2036 tracts and 5165 communities.
+30 has 2083 tracts and 4966 communities.
+8 has 1967 tracts and 5017 communities.
+7 has 1866 tracts and 4675 communities.
+3 has 3586 tracts and 8445 communities.
+Workerflow file usa-wf.dat not found.
