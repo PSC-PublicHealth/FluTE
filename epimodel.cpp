@@ -1577,6 +1577,7 @@ void EpiModel::day(void) {
   // calculate daytime susceptibility and infectiousness for each person
   vector< Community >::iterator cend = commvec.end();
   vector< Person >::iterator pend=pvec.end();
+  cout<<nTimer<<'\t';
   for (vector< Person >::iterator it = pvec.begin(); 
        it != pend;
        it++) {
@@ -1602,10 +1603,12 @@ void EpiModel::day(void) {
     }
     if (isSymptomatic(p))
       p.pri *= 2.0;  // symptomatic people are 2 times as infectious
+    if (isInfectious(p))
+      cout<<(int)p.iday<<","<<getWillBeSymptomatic(p)<<","<<isSymptomatic(p)<<","<<getIncubationDays(p)<<","<<(int)p.nWhichVload<<","<<p.pri/beta<<"\t";
     assert(p.pri<=1.0);
     assert(p.prs<=1.0);
   }
-
+  cout<<endl;
   for (vector< Community >::iterator it = commvec.begin(); 
        it != cend;
        it++) {
@@ -1813,7 +1816,7 @@ void EpiModel::night(void) {
 	  nightinfectsusceptibles(p, comm);
       }
     }
-
+    cout<<"n\t";
     // update infection and intervention status (timers)
     for (unsigned int pid=comm.nFirstPerson;
 	 pid<comm.nLastPerson;
@@ -1891,8 +1894,10 @@ void EpiModel::night(void) {
 #endif
 	}
       }
+    if (isInfectious(p))
+      cout<<(int)p.iday<<","<<getWillBeSymptomatic(p)<<","<<isSymptomatic(p)<<","<<getIncubationDays(p)<<","<<(int)p.nWhichVload<<","<<p.pri/beta<<"\t";
     }
-
+    cout<<endl;
     // update visitors
     if (bTravel) {
       list< Person >::iterator vend=comm.visitors.end();
