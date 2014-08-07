@@ -1,8 +1,6 @@
 /* class EpiModel implementation
  *
- * Implements a stochastic pandemic influenza simulator on 
- * an artificial population with fine structures constructed 
- * based on information of population census data.
+ * Implements a stochastic influenza epidemic simulator.
  */
 
 #include <cstdlib>
@@ -13,17 +11,21 @@
   #include <mpi.h>
 #endif
 extern "C" {
-  #include "SFMT.h"   // for random number generation
-  #include "bnldev.h" // for binomial random numbers
+  #include "dSFMT.h"   // for random number generation
+  #include "bnldev.h"  // for binomial random numbers
 }
 #include "params.h"
 #include "epimodel.h"
 #include "epimodelparameters.h"
+#include <malloc.h> 
 
 using namespace std;
 
 const int nVersionMajor = 1;
-const int nVersionMinor = 13;
+const int nVersionMinor = 15;
+
+#define get_rand_double dsfmt_genrand_close_open(&dsfmt)
+#define get_rand_uint32 dsfmt_genrand_uint32(&dsfmt)
 
 // vaccine efficacy over time when individuals need a boost for a one-dose vaccine
 const double defaultvacceff[VACCEFFLENGTH+1] = {0,0.001,0.004,0.011,0.023,0.043,0.07,0.106,0.153,0.211,0.28,0.363,0.46,0.572,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.7,0.702,0.71,0.73,0.766,0.82,0.897,1};
@@ -109,7 +111,8 @@ EpiModel::EpiModel(EpiModelParameters &params) {
   memcpy(seasonality, params.getSeasonality(), MAXRUNLENGTH*sizeof(double));
 
   nRunLength = params.getRunLength();
-  memcpy(fPreexistingImmunityByAge, params.getPreexistingImmunityByAge(), TAG*sizeof(double));
+  fPreexistingImmunityLevel = params.getPreexistingImmunityLevel();
+  memcpy(fPreexistingImmunityFraction, params.getPreexistingImmunityByAge(), TAG*sizeof(double));
   memcpy(fBaselineVESByAge, params.getBaselineVESByAge(), TAG*sizeof(double));
 
   // vaccination/AVs
@@ -170,19 +173,19 @@ EpiModel::EpiModel(EpiModelParameters &params) {
   // convert from double to unsigned int for efficiency
   for (int j=0; j<3; j++) {
     double sum=0.0;
-    withdrawcdf32[j][0] = (unsigned int)(withdrawprob[j][0]*UINT_MAX);
+    withdrawcdf[j][0] = withdrawprob[j][0];
     for (int i=1; i<WITHDRAWDAYS; i++) {
       sum += withdrawprob[j][i-1];
-      withdrawcdf32[j][i] = withdrawcdf32[j][i-1] + (unsigned int)(((1.0-sum)*withdrawprob[j][i])*UINT_MAX);
-      assert(withdrawcdf32[j][i]<=UINT_MAX);
+      withdrawcdf[j][i] = withdrawcdf[j][i-1] + ((1.0-sum)*withdrawprob[j][i]);
+      assert(withdrawcdf[j][i]<=1.0);
     }
   }
 
-  // initialize RNG seed
+  // initialize RNG
 #ifdef PARALLEL
-  init_gen_rand(seeddisp+rank);
+  dsfmt_init_gen_rand(&dsfmt, seeddisp+rank);
 #else
-  init_gen_rand(seeddisp);
+  dsfmt_init_gen_rand(&dsfmt, seeddisp);
 #endif
 
   double vmin = basevload[0][0];
@@ -295,25 +298,24 @@ EpiModel::EpiModel(EpiModelParameters &params) {
     logfile = params.getLogFile();
     if ((*logfile) && (*logfile).good()) {
       ostream &out = *logfile;
-      out << "time,TractID,sym0-4,sym5-18,sym19-29,sym30-64,sym65+,cumsym0-4,cumsym5-18,cumsym19-29,cumsym30-64,cumsym65+" << endl;
+      out << "time,TractID,sym0-4,sym5-18,sym19-29,sym30-64,sym65+,cumsym0-4,cumsym5-18,cumsym19-29,cumsym30-64,cumsym65+,newInfected0-4,newInfected5-18,newInfected19-29,newInfected30-64,newInfected65+,everInfected0-4,everInfected5-18,everInfected19-29,everInfected30-64,everInfected65+" << endl;
     }
     individualsfile = params.getIndividualsFile();
     sumfile = params.getSummaryFile();
   }
   bIndividualsFile = params.getHasIndividualsFile();
 
-  //  unsigned int uVaccinationFraction = (unsigned int)(UINT_MAX*fVaccinationFraction);    // unsigned int version of fVaccinationFraction
   vector< Person >::iterator pend=pvec.end();
   for (vector< Person >::iterator it = pvec.begin(); 
        it != pend;
        it++) {
     Person &p = *it;
-    if (fPreexistingImmunityByAge[p.age]>0.0 && genrand_real1()<fPreexistingImmunityByAge[p.age])
-      p.fBaselineVES = 1.0;
+    if (fPreexistingImmunityFraction[p.age]>0.0 && get_rand_double<fPreexistingImmunityFraction[p.age])
+      p.fBaselineVES = fPreexistingImmunityLevel;
     else
       p.fBaselineVES = fBaselineVESByAge[p.age];
     if (ePrevaccinationStrategy==PRIMEBOOSTRANDOM || // everyone is eligible when PRIMEBOOSTRANDOM
-	(fVaccinationFraction>0.0 && genrand_real1()<fVaccinationFraction)) {
+	(fVaccinationFraction>0.0 && get_rand_double<fVaccinationFraction)) {
       unsigned char priority = 100;
       if (nVaccinePriorities[PRIORITY_PREGNANT]>0 && isPregnant(p))
 	priority = min(nVaccinePriorities[PRIORITY_PREGNANT], priority);
@@ -362,7 +364,7 @@ void EpiModel::read_tracts(void) {
   // read all tracts
   ifstream iss(oss.str().c_str());
   if (!iss) {
-    cerr << oss.str() << " not found." << endl;
+    cerr << "ERROR: " << oss.str() << " not found." << endl;
     MPI::Finalize();
     exit(-1);
   }
@@ -443,7 +445,7 @@ void EpiModel::read_tracts(void) {
   oss.str(szBaseName+"-tracts.dat");
   ifstream iss(oss.str().c_str());
   if (!iss) {
-    cerr << oss.str() << " not found." << endl;
+    cerr << "ERROR: " << oss.str() << " not found." << endl;
     exit(-1);
   }
   istream_iterator< Tract > iscit(iss), eos;
@@ -458,7 +460,6 @@ void EpiModel::read_tracts(void) {
     tractToFIPSstate[i] = tractvec[i].fips_state;
   }
 #endif
-
   unsigned int nEstPop = 0; // estimated total population
   for (vector< Tract >::iterator it = tractvec.begin();
        it != tractvec.end();
@@ -562,7 +563,7 @@ void EpiModel::read_workflow(void)
   oss.str(szBaseName+"-employment.dat");
   ifstream iss(oss.str().c_str());
   if (!iss) {
-    cerr << oss.str() << " not found." << endl;
+    cerr << "ERROR: " << oss.str() << " not found." << endl;
 #ifdef PARALLEL
     MPI::Finalize();
 #endif
@@ -596,7 +597,7 @@ void EpiModel::read_workflow(void)
   // Read workflow data
   unsigned int *flow = new unsigned int[nNumTracts*nNumTractsTotal]; // Workerflow matrix
   if (!flow) {
-    cerr << "Could not allocate workerflow matrix. (" << (nNumTracts*nNumTractsTotal) << " ints)" << endl;
+    cerr << "ERROR: Could not allocate workerflow matrix. (" << (nNumTracts*nNumTractsTotal) << " ints)" << endl;
 #ifdef PARALLEL
     MPI::Finalize();
 #endif
@@ -605,11 +606,6 @@ void EpiModel::read_workflow(void)
   memset(flow, 0, nNumTracts*nNumTractsTotal*sizeof(unsigned int));
   oss.str(szBaseName+"-wf.dat");
   if (!read_workflow_file(oss.str(), flow, statetracts)) {
-#if PARALLEL
-    if (!rank)
-#endif
-      cerr << "Workerflow file " << oss.str() << " not found." << endl;
-
     // look at state-based wf files here
     bool bSuccess = false;
     for (unsigned int i=1; i<=56; i++) {
@@ -632,7 +628,7 @@ void EpiModel::read_workflow(void)
       }
     }
     if (!bSuccess) {
-      cerr << "Could not find any workerflow files." << endl;
+      cerr << "ERROR: Could not find any workerflow files." << endl;
 #ifdef PARALLEL
       MPI::Finalize();
 #endif
@@ -657,17 +653,17 @@ void EpiModel::read_workflow(void)
 	 pid++) {
       Person &p = pvec[pid];
       if (isWorkingAge(p)) { // is adult?
-	if (genrand_real1() < tractvec[comm.nTractID-nFirstTract].fEmploymentProb) { // is employed?
-	  if (fAdultEssentialFraction>0.0 && genrand_real1() < fAdultEssentialFraction)
+	if (get_rand_double < tractvec[comm.nTractID-nFirstTract].fEmploymentProb) { // is employed?
+	  if (fAdultEssentialFraction>0.0 && get_rand_double < fAdultEssentialFraction)
 	    setEssential(p);
 
 	  p.nWorkplace=-1; // assign placeholder workplace
-	  p.nDayNeighborhood=gen_rand32() % 4; // work neighborhood
+	  p.nDayNeighborhood=get_rand_uint32 % 4; // work neighborhood
 	  if (flow[fromtract*nNumTractsTotal + nNumTractsTotal-1]==0) {
 	    // no workerflow data for this tract, so work in home tract
 	    p.nDayTract = comm.nTractID;
-	    if (tractvec[fromtract].nLastCommunity-tractvec[fromtract].nFirstCommunity>1 && (gen_rand32()%4!=0)) {
-	      p.nDayComm = tractvec[fromtract].nFirstCommunity + (gen_rand32() % (tractvec[fromtract].nLastCommunity-tractvec[fromtract].nFirstCommunity));
+	    if (tractvec[fromtract].nLastCommunity-tractvec[fromtract].nFirstCommunity>1 && (get_rand_double>=0.25)) {
+	      p.nDayComm = tractvec[fromtract].nFirstCommunity + (get_rand_uint32 % (tractvec[fromtract].nLastCommunity-tractvec[fromtract].nFirstCommunity));
 	      if (p.nDayComm!=p.nHomeComm)
 		commvec[p.nDayComm].workers.push_back(pid); // add to other community worker list
 	    } else // the probability of working in the home comm is high
@@ -675,7 +671,7 @@ void EpiModel::read_workflow(void)
 	    commvec[p.nDayComm].nNumWorkers++;
 	  } else {
 	    // Choose a random destination unit
-	    unsigned int irnd = gen_rand32() % flow[fromtract*nNumTractsTotal + nNumTractsTotal-1];
+	    unsigned int irnd = get_rand_uint32 % flow[fromtract*nNumTractsTotal + nNumTractsTotal-1];
 	    p.nDayTract=0;
 	    while (irnd > flow[fromtract*nNumTractsTotal + p.nDayTract])
 	      p.nDayTract++;
@@ -685,10 +681,10 @@ void EpiModel::read_workflow(void)
 	      totract-=nFirstTract;
 #endif
 	      if (tractvec[totract].nLastCommunity-tractvec[totract].nFirstCommunity>1) {
-		if (fromtract==totract && (gen_rand32()%4==0)) // the probability of working in the home comm is high
+		if (fromtract==totract && (get_rand_double<0.25)) // the probability of working in the home comm is high
 		  p.nDayComm=p.nHomeComm;
 		else
-		  p.nDayComm=tractvec[totract].nFirstCommunity + (gen_rand32() % (tractvec[totract].nLastCommunity-tractvec[totract].nFirstCommunity));
+		  p.nDayComm=tractvec[totract].nFirstCommunity + (get_rand_uint32 % (tractvec[totract].nLastCommunity-tractvec[totract].nFirstCommunity));
 	      } else
 		p.nDayComm=tractvec[totract].nFirstCommunity;
 	      commvec[p.nDayComm].nNumWorkers++;
@@ -784,7 +780,7 @@ void EpiModel::read_workflow(void)
 	  Tract &t = tractvec[visitor.nDayTract-nFirstTract];
 	  visitor.nDayComm = t.nFirstCommunity;
 	  if (t.nLastCommunity-t.nFirstCommunity>1)
-	    visitor.nDayComm += gen_rand32() % (t.nLastCommunity - t.nFirstCommunity);
+	    visitor.nDayComm += get_rand_uint32 % (t.nLastCommunity - t.nFirstCommunity);
 	  assert(visitor.nDayComm<commvec.size());
 	  commvec[visitor.nDayComm].nNumWorkers++;
 	  visitor.bWantAV = visitor.bWantVac = false;
@@ -809,7 +805,7 @@ void EpiModel::read_workflow(void)
 	 pit != comm.immigrantworkers.end();
 	 pit++) {
       Person &p = *pit;
-      p.nWorkplace =  1 + (gen_rand32() % comm.nNumWorkGroups);
+      p.nWorkplace =  1 + (get_rand_uint32 % comm.nNumWorkGroups);
     }
 #endif
   }
@@ -825,7 +821,7 @@ void EpiModel::read_workflow(void)
 #else
     if (isWorkingAge(p) && p.nWorkplace<0) {  // is adult and employed?
 #endif
-      p.nWorkplace = 1 + (gen_rand32() % commvec[p.nDayComm].nNumWorkGroups);
+      p.nWorkplace = 1 + (get_rand_uint32 % commvec[p.nDayComm].nNumWorkGroups);
       if (p.nDayComm!=p.nHomeComm)
 	commvec[p.nHomeComm].nNumWorkersLeaving++;
     }
@@ -899,14 +895,14 @@ void EpiModel::create_person(int nAgeGroup, int nFamilySize, int nFamily, int nH
   p.sourceid = p.id;
   p.nInfectedTime = -1;
   p.nVaccinePriority=0;
-  p.nWhichVload = gen_rand32()%VLOADNSUB;
+  p.nWhichVload = get_rand_uint32%VLOADNSUB;
   p.nVaccineRestrictionBits = 0;
   memset(p.bVaccineEligible, 0, NUMVACCINES*sizeof(bool));
-  if (p.age==0 && genrand_real1()<fAG0InfantFraction)
+  if (p.age==0 && get_rand_double<fAG0InfantFraction)
     setInfant(p);
-  if (fHighRiskFraction[p.age]>0.0 && (fHighRiskFraction[p.age]==1.0 || genrand_real1() < fHighRiskFraction[p.age]))
+  if (fHighRiskFraction[p.age]>0.0 && (fHighRiskFraction[p.age]==1.0 || get_rand_double < fHighRiskFraction[p.age]))
     setHighRisk(p);
-  if (fPregnantFraction[p.age]>0.0 && genrand_real1()<fPregnantFraction[p.age])
+  if (fPregnantFraction[p.age]>0.0 && get_rand_double<fPregnantFraction[p.age])
     setPregnant(p);
 
 #ifdef PARALLEL
@@ -928,6 +924,7 @@ void EpiModel::create_families(Community& comm, int nTargetSize) {
   comm.nNumResidents=0;
   memset(comm.ninf, 0, TAG*sizeof(int));
   memset(comm.nsym, 0, TAG*sizeof(int));
+  memset(comm.nNewlyInfected, 0, TAG * sizeof(int));
   memset(comm.nEverInfected, 0, TAG*sizeof(int));
   memset(comm.nEverSymptomatic, 0, TAG*sizeof(int));
   memset(comm.nEverAscertained, 0, TAG*sizeof(int));
@@ -939,96 +936,289 @@ void EpiModel::create_families(Community& comm, int nTargetSize) {
   playgroup[3] = 12;
   nplay[0] = nplay[1] = nplay[2] = nplay[3] = 0;
   while (comm.nNumResidents < nTargetSize) {
-    int family_size, age_group, nNumChildren=0;
     // Create a new family and randomly place it
-
-    // Generate a random non-negative long int uniformly distributed
-    // between [0, 2^31], and break it down into several random nos.
-    unsigned long lrandom = gen_rand32();
-    int il = lrandom % 100;                   // random int from 0 to 99
-    int il2 = (lrandom / 100) % 100;          // random int from 0 to 99
-    int il3 = (lrandom / 10000) % 100;        // random int from 0 to 99
-    int il4 = (lrandom / 1000000) % 100;      // random int from 0 to 99
-    int nborhood = (lrandom / 100000000) % 4; // random int from 0 to 3
-
-    if (il < 33) {    // 33% of households are single-person
-      family_size = 1;
-      nNumChildren = 0;
-      if (il2 < 28) age_group = 4;      // single adult age 65+
-      else if (il2 < 58) age_group = 3; // age 30-64 (ASSUME 30%)
-      else age_group = 2;               // single adult age 19-29
-
-      create_person(age_group, family_size, nNumFamilies, nNumFamilies/Community::FAMILIESPERCLUSTER, nborhood, -1, comm);
-      comm.nNumAge[age_group]++;
-    } else if (il < 67) {    // 34% of households are two-person
-      family_size = 2;
-      if (il2 == 0) {
-	// 1% probability of one parent + one child
-	nNumChildren=1;
-	if (il3 < 2) age_group = 4;       // one parent, age 65+
-	else if (il3 < 62) age_group = 3; // one parent 30-64 (ASSUME 60%)
-	else age_group = 2;               // one parent 19-29
-	create_person(age_group, family_size, nNumFamilies, nNumFamilies/Community::FAMILIESPERCLUSTER, nborhood, -1, comm);
-	comm.nNumAge[age_group]++;
-      } else {
-	// 2 adults, 28% over 65 (ASSUME both same age group)
-	nNumChildren=0;
-	if (il2 < 28) age_group = 4;      // age 65+
-	else if (il2 < 58) age_group = 3; // age 30-64 (ASSUME 30%)
-	else age_group = 2;               // single adult age 19-29
-	create_person(age_group, family_size, nNumFamilies, nNumFamilies/Community::FAMILIESPERCLUSTER, nborhood, -1, comm);
-	create_person(age_group, family_size, nNumFamilies, nNumFamilies/Community::FAMILIESPERCLUSTER, nborhood, -1, comm);
-	comm.nNumAge[age_group]+=2;
+    // This uses the US Census's PUMS 1% data for the continental US+DC
+    // (http://www2.census.gov/census_2000/datasets/PUMS/OnePercent/).
+    // The distribution of household sizes was based on the PUMS data
+    // for households of 1-7 people.
+    // The probablities for the actual age structure of households
+    // were also used  (e.g., the number of 2 elderly people living 
+    // together, or one pre-schooler and two young adults, etc).
+    // For households of size 1-2, all combinations of ages were included.
+    // For households of size 3-7, only the household compositions that 
+    // covered at least 1% of households of that size were used.
+    // So if there was an unusual structure (e.g., one elderly and several
+    // preschoolers), it was not included.
+    int agegroups[TAG] = {0,0,0,0,0};
+    double r = get_rand_double;
+    if (r<0.2606) { // single-person household
+      if (r<0.0955)
+	agegroups[4] = 1;
+      else if (r<0.2309)
+	agegroups[3] = 1;
+      else if (r<0.2601)
+	agegroups[2] = 1;
+      else
+	agegroups[1] = 1;
+    } else if (r<0.5892) { // two-person household
+      if (r<0.3254329) {    // two elderly
+	agegroups[4] = 2;
+      } else if (r<0.3623) {  // elderly+old
+	agegroups[4] = 1; agegroups[3] = 1;
+      } else if (r<0.5037) {  // two old
+	agegroups[3] = 2;
+      } else if (r<0.5051) {  // elderly+young
+	agegroups[4] = 1; agegroups[2] = 1;
+      } else if (r<0.5295) {  // old+young
+	agegroups[3] = 1; agegroups[2] = 1;
+      } else if (r<0.5594) {  // two young
+	agegroups[2] = 2;
+      } else if (r<0.5600) {  // elderly+school
+	agegroups[4] = 1; agegroups[1] = 1;
+      } else if (r<0.5797) {  // old+school
+	agegroups[3] = 1; agegroups[1] = 1;
+      } else if (r<0.5831) {  // young+school
+	agegroups[2] = 1; agegroups[1] = 1;
+      } else if (r<0.5833) {  // two school
+	agegroups[1] = 2;
+      } else if (r<0.5853) {  // old+preschool
+	agegroups[3] = 1; agegroups[0] = 1;
+      } else if (r<0.5891) {  // young+preschool
+	agegroups[2] = 1; agegroups[0] = 1;
+      } else {                // school+preschool
+	agegroups[1] = 1; agegroups[0] = 1;
       }
-    } else if (il < 80) family_size = 3;
-    else if (il < 90) family_size = 4;
-    else if (il < 97) family_size = 5;
-    else if (il < 99) family_size = 6;
-    else family_size = 7;
-
-    if (family_size > 2) {
-      nNumChildren=family_size-2;
-      // 2 adults, of the same age group
-      if (il2 < 2) age_group = 4;       // parents are age 65+
-      else if (il2 < 62) age_group = 3; // parents 30-64 (ASSUME 60%)
-      else age_group = 2;               // parents 19-29
-      create_person(age_group, family_size, nNumFamilies, nNumFamilies/Community::FAMILIESPERCLUSTER, nborhood, -1, comm);
-      create_person(age_group, family_size, nNumFamilies, nNumFamilies/Community::FAMILIESPERCLUSTER, nborhood, -1, comm);
-      comm.nNumAge[age_group]+=2;
-    }
-  
-    // Now generate the children
-    while (nNumChildren-- > 0) {
-      int school;
-      if ((gen_rand32() % 288) < 220) {
-	age_group = 1;  // 22.0% of total population are ages 5-18
-	il4 = gen_rand32() % 100;
-	if (il4 < 36)
-	  school = 3 + (nborhood / 2);  // elementary school
-	else if (il4 < 68)
-	  school = 2;  // middle school
-	else if (il4 < 93)
-	  school = 1;  // high school
-	else
-	  school = 0;  // not in school, presumably 18-year-olds or some home-schooled
+    } else if (r<0.7553) { // three-person household
+      if (r<0.59592) {
+	agegroups[3]=1;agegroups[4]=2;
+      } else if (r<0.6033) {
+	agegroups[3]=2;agegroups[4]=1;
+      } else if (r<0.61044) {
+	agegroups[3]=3;
+      } else if (r<0.61275) {
+	agegroups[2]=1;agegroups[3]=1;agegroups[4]=1;
+      } else if (r<0.63532) {
+	agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.63874) {
+	agegroups[2]=2;agegroups[3]=1;
+      } else if (r<0.64236) {
+	agegroups[2]=3;
+      } else if (r<0.64464) {
+	agegroups[1]=1;agegroups[3]=1;agegroups[4]=1;
+      } else if (r<0.69282) {
+	agegroups[1]=1;agegroups[3]=2;
+      } else if (r<0.70003) {
+	agegroups[1]=1;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.70258) {
+	agegroups[1]=1;agegroups[2]=2;
+      } else if (r<0.71606) {
+	agegroups[1]=2;agegroups[3]=1;
+      } else if (r<0.73057) {
+	agegroups[0]=1;agegroups[3]=2;
+      } else if (r<0.73841) {
+	agegroups[0]=1;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.75046) {
+	agegroups[0]=1;agegroups[2]=2;
+      } else if (r<0.75293) {
+	agegroups[0]=1;agegroups[1]=1;agegroups[3]=1;
+      } else if (r<0.75532) {
+	agegroups[0]=1;agegroups[1]=1;agegroups[2]=1;
+      }
+    } else if (r<0.8988042) { // four-person household
+      if (r<0.76155) {
+	agegroups[2]=2;agegroups[3]=2;
+      } else if (r<0.76334) {
+	agegroups[1]=1;agegroups[3]=2;agegroups[4]=1;
+      } else if (r<0.76525) {
+	agegroups[1]=1;agegroups[3]=3;
+      } else if (r<0.77826) {
+	agegroups[1]=1;agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.84032) {
+	agegroups[1]=2;agegroups[3]=2;
+      } else if (r<0.84477) {
+	agegroups[1]=2;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.84981) {
+	agegroups[1]=3;agegroups[3]=1;
+      } else if (r<0.85167) {
+	agegroups[0]=1;agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.87035) {
+	agegroups[0]=1;agegroups[1]=1;agegroups[3]=2;
+      } else if (r<0.8757) {
+	agegroups[0]=1;agegroups[1]=1;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.8801) {
+	agegroups[0]=1;agegroups[1]=1;agegroups[2]=2;
+      } else if (r<0.88185) {
+	agegroups[0]=1;agegroups[1]=2;agegroups[3]=1;
+      } else if (r<0.89) {
+	agegroups[0]=2;agegroups[3]=2;
+      } else if (r<0.89344) {
+	agegroups[0]=2;agegroups[2]=1;agegroups[3]=1;
       } else {
-	age_group = 0;  // 6.8% of total population are ages 0-4
-	if ((gen_rand32() % 34) < 14)  // 14/34 probability of daycare
-	  school = 5+nborhood;
-	else { // otherwise playgroups, 4 children each
-	  if (nplay[nborhood] == 4) {  // full, start a new one
-	    playgroup[nborhood] = nPlaygroupIndex++;
-	    nplay[nborhood] = 0;
+	agegroups[0]=2;agegroups[2]=2;
+      }
+    } else if (r<0.9661342) { // five-person household
+      if (r<0.89985) {
+	agegroups[2]=3;agegroups[3]=2;
+      } else if (r<0.90282) {
+	agegroups[1]=1;agegroups[2]=2;agegroups[3]=2;
+      } else if (r<0.90443) {
+	agegroups[1]=2;agegroups[3]=2;agegroups[4]=1;
+      } else if (r<0.90618) {
+	agegroups[1]=2;agegroups[3]=3;
+      } else if (r<0.91267) {
+	agegroups[1]=2;agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.93739) {
+	agegroups[1]=3;agegroups[3]=2;
+      } else if (r<0.93918) {
+	agegroups[1]=3;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.94066) {
+	agegroups[1]=4;agegroups[3]=1;
+      } else if (r<0.94171) {
+	agegroups[0]=1;agegroups[2]=2;agegroups[3]=2;
+      } else if (r<0.94352) {
+	agegroups[0]=1;agegroups[1]=1;agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.95513) {
+	agegroups[0]=1;agegroups[1]=2;agegroups[3]=2;
+      } else if (r<0.95772) {
+	agegroups[0]=1;agegroups[1]=2;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.9589) {
+	agegroups[0]=1;agegroups[1]=2;agegroups[2]=2;
+      } else if (r<0.96292) {
+	agegroups[0]=2;agegroups[1]=1;agegroups[3]=2;
+      } else if (r<0.96458) {
+	agegroups[0]=2;agegroups[1]=1;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.96613) {
+	agegroups[0]=2;agegroups[1]=1;agegroups[2]=2;
+      }
+    } else if (r<0.9913266) { // six-person household
+      if (r<0.96663) {
+	agegroups[1]=1;agegroups[2]=3;agegroups[3]=2;
+      } else if (r<0.96698) {
+	agegroups[1]=2;agegroups[3]=4;
+      } else if (r<0.96745) {
+	agegroups[1]=2;agegroups[2]=1;agegroups[3]=3;
+      } else if (r<0.96874) {
+	agegroups[1]=2;agegroups[2]=2;agegroups[3]=2;
+      } else if (r<0.96937) {
+	agegroups[1]=3;agegroups[3]=2;agegroups[4]=1;
+      } else if (r<0.97021) {
+	agegroups[1]=3;agegroups[3]=3;
+      } else if (r<0.97248) {
+	agegroups[1]=3;agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.97889) {
+	agegroups[1]=4;agegroups[3]=2;
+      } else if (r<0.97943) {
+	agegroups[1]=4;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.97981) {
+	agegroups[1]=5;agegroups[3]=1;
+      } else if (r<0.98054) {
+	agegroups[0]=1;agegroups[1]=1;agegroups[2]=2;agegroups[3]=2;
+      } else if (r<0.98104) {
+	agegroups[0]=1;agegroups[1]=2;agegroups[3]=3;
+      } else if (r<0.98223) {
+	agegroups[0]=1;agegroups[1]=2;agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.98259) {
+	agegroups[0]=1;agegroups[1]=2;agegroups[2]=2;agegroups[3]=1;
+      } else if (r<0.98668) {
+	agegroups[0]=1;agegroups[1]=3;agegroups[3]=2;
+      } else if (r<0.98745) {
+	agegroups[0]=1;agegroups[1]=3;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.98788) {
+	agegroups[0]=2;agegroups[1]=1;agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.98987) {
+	agegroups[0]=2;agegroups[1]=2;agegroups[3]=2;
+      } else if (r<0.99054) {
+	agegroups[0]=2;agegroups[1]=2;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.99098) {
+	agegroups[0]=2;agegroups[1]=2;agegroups[2]=2;
+      } else {
+	agegroups[0]=3;agegroups[1]=1;agegroups[3]=2;
+      }
+    } else { // seven-person household
+      if (r<0.99147) {
+	agegroups[1]=2;agegroups[2]=2;agegroups[3]=3;
+      } else if (r<0.9917) {
+	agegroups[1]=2;agegroups[2]=3;agegroups[3]=2;
+      } else if (r<0.99185) {
+	agegroups[1]=3;agegroups[3]=4;
+      } else if (r<0.99205) {
+	agegroups[1]=3;agegroups[2]=1;agegroups[3]=3;
+      } else if (r<0.99255) {
+	agegroups[1]=3;agegroups[2]=2;agegroups[3]=2;
+      } else if (r<0.99272) {
+	agegroups[1]=4;agegroups[3]=2;agegroups[4]=1;
+      } else if (r<0.99298) {
+	agegroups[1]=4;agegroups[3]=3;
+      } else if (r<0.99366) {
+	agegroups[1]=4;agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.99514) {
+	agegroups[1]=5;agegroups[3]=2;
+      } else if (r<0.9953) {
+	agegroups[1]=5;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.99552) {
+	agegroups[0]=1;agegroups[1]=1;agegroups[2]=3;agegroups[3]=2;
+      } else if (r<0.99567) {
+	agegroups[0]=1;agegroups[1]=2;agegroups[2]=1;agegroups[3]=3;
+      } else if (r<0.9961) {
+	agegroups[0]=1;agegroups[1]=2;agegroups[2]=2;agegroups[3]=2;
+      } else if (r<0.9963) {
+	agegroups[0]=1;agegroups[1]=3;agegroups[3]=3;
+      } else if (r<0.9968) {
+	agegroups[0]=1;agegroups[1]=3;agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.99694) {
+	agegroups[0]=1;agegroups[1]=3;agegroups[2]=2;agegroups[3]=1;
+      } else if (r<0.99814) {
+	agegroups[0]=1;agegroups[1]=4;agegroups[3]=2;
+      } else if (r<0.99836) {
+	agegroups[0]=1;agegroups[1]=4;agegroups[2]=1;agegroups[3]=1;
+      } else if (r<0.99854) {
+	agegroups[0]=2;agegroups[1]=1;agegroups[2]=2;agegroups[3]=2;
+      } else if (r<0.99874) {
+	agegroups[0]=2;agegroups[1]=2;agegroups[2]=1;agegroups[3]=2;
+      } else if (r<0.99889) {
+	agegroups[0]=2;agegroups[1]=2;agegroups[2]=2;agegroups[3]=1;
+      } else if (r<0.99964) {
+	agegroups[0]=2;agegroups[1]=3;agegroups[3]=2;
+      } else if (r<0.99984) {
+	agegroups[0]=2;agegroups[1]=3;agegroups[2]=1;agegroups[3]=1;
+      } else {
+	agegroups[0]=3;agegroups[1]=2;agegroups[3]=2;
+      }
+    }
+
+    int family_size = agegroups[0] + agegroups[1] + agegroups[2] + agegroups[3] + agegroups[4];
+    int nNeighborhood = get_rand_uint32 % 4; // random int from 0 to 3
+    for (int age=0; age<TAG; age++) {
+      while (agegroups[age]>0) {
+	int nSchoolgroup = -1;
+	if (age==0) { // assign preschool or playgroup?
+	  if (get_rand_double<14.0/34.0)  // 14/34 probability of daycare
+	    nSchoolgroup = 5+nNeighborhood;
+	  else { // otherwise playgroups, 4 children each
+	    if (nplay[nNeighborhood] == 4) {  // full, start a new one
+	      playgroup[nNeighborhood] = nPlaygroupIndex++;
+	      nplay[nNeighborhood] = 0;
+	    }
+	    nSchoolgroup = playgroup[nNeighborhood];
+	    nplay[nNeighborhood]++;
 	  }
-	  school = playgroup[nborhood];
-	  nplay[nborhood]++;
+	} else if (age==1) { // assign school
+	  double r2 = get_rand_double;
+	  if (r2<0.36)
+	    nSchoolgroup = 3 + (nNeighborhood / 2);  // elementary school
+	  else if (r2<0.68)
+	    nSchoolgroup = 2;  // middle school
+	  else if (r2<0.93)
+	    nSchoolgroup = 1;  // high school
+	  else
+	    nSchoolgroup = 0;  // not in school, presumably 18-year-olds or some home-schooled
 	}
+	create_person(age, family_size, nNumFamilies, nNumFamilies/Community::FAMILIESPERCLUSTER, nNeighborhood, nSchoolgroup, comm);
+	comm.nNumResidents++;
+	comm.nNumAge[age]++;
+	agegroups[age]--;
       }
-      create_person(age_group, family_size, nNumFamilies, nNumFamilies/Community::FAMILIESPERCLUSTER, nborhood, school, comm);
-      comm.nNumAge[age_group]++;
     }
-
-    comm.nNumResidents += family_size;
     nNumFamilies++;
   }
   comm.nLastPerson=nNumPerson;
@@ -1042,7 +1232,6 @@ void EpiModel::initPopulation(void) {
   read_tracts();
   // create workgroups
   read_workflow();
-
   // rescale the contact probabilities
   vector< Community >::iterator cend = commvec.end();
   for (vector< Community >::iterator it = commvec.begin(); 
@@ -1089,13 +1278,13 @@ void EpiModel::infect(Person& p) {
   }
   if (isAntiviral(p))
     fSymptomaticProb*=(1.0-AVEp);
-  double rn = genrand_real1();
+  double rn = get_rand_double;
   if (rn<fSymptomaticProb) {  // will be symptomatic
     setWillBeSymptomatic(p);
-    unsigned int rn32 = gen_rand32();
-    if (rn32 < incubationcdf32[0])
+    double rn2 = get_rand_double;
+    if (rn2 < incubationcdf[0])
       setIncubationDays(p,1);
-    else if (rn32 < incubationcdf32[1])
+    else if (rn2 < incubationcdf[1])
       setIncubationDays(p,2);
     else
       setIncubationDays(p,3);
@@ -1103,21 +1292,21 @@ void EpiModel::infect(Person& p) {
     if (rn<fSymptomaticProb*fSymptomaticAscertainment) { // will be ascertained
       setWillBeAscertained(p);
     }
-    rn32 = gen_rand32();
-    unsigned int *wdcdf = withdrawcdf32[isChild(p)?p.age:2];
-    if (rn32<wdcdf[0])
+    rn2 = get_rand_double;
+    double *wdcdf = withdrawcdf[isChild(p)?p.age:2];
+    if (rn2<wdcdf[0])
       setWithdrawDays(p,getIncubationDays(p)+0);
-    else if (rn32<wdcdf[1])
+    else if (rn2<wdcdf[1])
       setWithdrawDays(p,getIncubationDays(p)+1);
-    else if (rn32<wdcdf[2])
+    else if (rn2<wdcdf[2])
       setWithdrawDays(p,getIncubationDays(p)+2);
     else
       setWithdrawDays(p,0); // will not withdraw
 
     if (bTrigger && (getWithdrawDays(p)==0 || // doesn't voluntarily withdraw
 		     getWithdrawDays(p)-getIncubationDays(p)>1)) { // would withdraw later
-      if ((fLiberalLeaveCompliance>0.0 && isWorkingAge(p) && p.nWorkplace>0 && genrand_real1()<fLiberalLeaveCompliance) || // on liberal leave
-	  (fIsolationCompliance>0.0 && genrand_real1()<fIsolationCompliance)) { // voluntary isolation
+      if ((fLiberalLeaveCompliance>0.0 && isWorkingAge(p) && p.nWorkplace>0 && get_rand_double<fLiberalLeaveCompliance) || // on liberal leave
+	  (fIsolationCompliance>0.0 && get_rand_double<fIsolationCompliance)) { // voluntary isolation
 	setWithdrawDays(p,getIncubationDays(p)+1);
       }
     }
@@ -1141,6 +1330,7 @@ void EpiModel::infect(Person& p) {
 #endif
       ++commvec[p.nHomeComm].ninf[p.age];
       ++commvec[p.nHomeComm].nEverInfected[p.age];
+	  ++commvec[p.nHomeComm].nNewlyInfected[p.age];
     }
   }
 }
@@ -1154,7 +1344,7 @@ void EpiModel::infect(Person& p) {
 bool EpiModel::infect(Person& p, const Person& source, double baseprob, int sourcetype) {
   assert(source.iday>=0);
   assert(isSusceptible(p));
-  if (genrand_real1()<baseprob*p.prs*source.pri) {
+  if (get_rand_double<baseprob*p.prs*source.pri) {
     p.sourceid = source.id;
     p.sourcetype = sourcetype;
     p.nInfectedTime = nTimer;
@@ -1176,8 +1366,8 @@ bool EpiModel::isEligible(const Person &p, int nVacNum) {
       (VaccineData[nVacNum].bPregnant && isPregnant(p)) ||
       (isInfant(p) && 
        (VaccineData[nVacNum].fInfants>=1.0 ||
-	genrand_real1()<VaccineData[nVacNum].fInfants)) ||
-      genrand_real1()<VaccineData[nVacNum].fAge[p.age])
+	get_rand_double<VaccineData[nVacNum].fInfants)) ||
+      get_rand_double<VaccineData[nVacNum].fAge[p.age])
     return false;
   return true;
 }
@@ -1234,7 +1424,7 @@ void EpiModel::TAP(Person& p) {
 	    (p.householdcluster == target.householdcluster || // in household cluster
 	     (isChild(p) && isChild(target) && p.nWorkplace==target.nWorkplace && 
 	      (p.nWorkplace>=5 ||  // in daycare or playgroup
-	       genrand_real1()<fContactAscertainment)))))) { // in elementary/middle/high
+	       get_rand_double<fContactAscertainment)))))) { // in elementary/middle/high
 	if (p.id!=target.id)
 	  setAVProphylaxis(target); // prophylaxis, not treatment
 	// 100% of family, household cluster, pre-school group, play group
@@ -1335,6 +1525,7 @@ void EpiModel::dayinfectsusceptibles(const Person &infected, Community &comm) {
       }
     }
   }
+
 #ifdef PARALLEL
   // loop over susceptible workers visiting from other processors
   for (vector< Person >::iterator it = comm.immigrantworkers.begin();
@@ -1562,6 +1753,7 @@ void EpiModel::nightinfectsusceptibles(const Person &infected, Community &comm) 
       }
     }
   }
+
   // check for susceptible travelers
   if (bTravel) {
     list< Person >::iterator vend=comm.visitors.end();
@@ -1646,7 +1838,7 @@ void EpiModel::night(void) {
 		     pid2<comm.nLastPerson;
 		     pid2++) {
 		  Person &p2 = pvec[pid2];
-		  if (p.family==p2.family && p.id!=p2.id && genrand_real1()<fQuarantineCompliance) { // quarantine family member
+		  if (p.family==p2.family && p.id!=p2.id && get_rand_double<fQuarantineCompliance) { // quarantine family member
 		    setQuarantined(p2);  // household quarantine
 		    p2.nQuarantineTimer = nQuarantineLength+1;
 #ifdef PARALLEL
@@ -1690,7 +1882,7 @@ void EpiModel::night(void) {
 	if (!isAVProphylaxis(p))
 	  --p.nAVTimer; // treatment requires 2nd tablet each day
 	if (p.nAVTimer<=0 || 
-	    (p.nAVTimer==nAntiviralCourseSize-2 && genrand_real1()<fStopAntiviralTwoPills)) {
+	    (p.nAVTimer==nAntiviralCourseSize-2 && get_rand_double<fStopAntiviralTwoPills)) {
 	  clearAntiviral(p);    // antiviral over for this person
 	  clearAVProphylaxis(p);
 #ifdef PARALLEL
@@ -1795,6 +1987,7 @@ void EpiModel::travel_end(void) {
 	    if (!isInfected(original)) {
 	      ++commvec[original.nHomeComm].ninf[original.age];
 	      ++commvec[original.nHomeComm].nEverInfected[original.age];
+		  ++commvec[original.nHomeComm].nNewlyInfected[original.age];
 	      original.nInfectedTime = p.nInfectedTime;
 #ifdef PARALLEL
 	      if (original.nWorkRank!=rank)
@@ -1901,6 +2094,7 @@ void EpiModel::travel_end(void) {
 	      if (!isInfected(original)) {
 		++commvec[original.nHomeComm].ninf[original.age];
 		++commvec[original.nHomeComm].nEverInfected[original.age];
+		++commvec[original.nHomeComm].nNewlyInfected[original.age];
 		original.nInfectedTime = nTimer; //pdat->nInfectedTime;
 		original.sourcetype = pdat->sourcetype+32;
 		original.sourceid = pdat->sourceid; // from other node!
@@ -1954,14 +2148,14 @@ void EpiModel::travel_start(void) {
     Person &p = *it;
     // This is inefficient!  try using a binomial to compute the number
     // of travelers.
-    if (p.nTravelTimer<=0 && !isQuarantined(p) && genrand_real1() < travel_pr[p.age]) {
+    if (p.nTravelTimer<=0 && !isQuarantined(p) && get_rand_double < travel_pr[p.age]) {
       // We're going to DisneyWorld!
-      double r = genrand_real1();
+      double r = get_rand_double;
       int i;
       for (i=0; r>travel_length_cdf[i]; i++)
 	;
       p.nTravelTimer = i+1;
-      unsigned int destinationtract = gen_rand32() % nNumTractsTotal;
+      unsigned int destinationtract = get_rand_uint32 % nNumTractsTotal;
 #ifdef PARALLEL
       if (p.nWorkRank!=rank)
 	emigrantupdates.push_back(p.id);
@@ -1978,7 +2172,7 @@ void EpiModel::travel_start(void) {
 	unsigned int destinationcomm = tractvec[destinationtract-nFirstTract].nFirstCommunity;
 	int diff = tractvec[destinationtract-nFirstTract].nLastCommunity-tractvec[destinationtract-nFirstTract].nFirstCommunity;
 	if (diff>1)
-	  destinationcomm += gen_rand32() % diff;
+	  destinationcomm += get_rand_uint32 % diff;
 	assert(destinationcomm<commvec.size());
 	commvec[destinationcomm].visitors.push_back(p);
 	Person &traveler = commvec[destinationcomm].visitors.back();
@@ -1989,16 +2183,16 @@ void EpiModel::travel_start(void) {
 	traveler.nDayTract = destinationtract;
 	traveler.nHomeComm = destinationcomm;
 	traveler.nDayComm = destinationcomm;
-	traveler.nDayNeighborhood = gen_rand32() % 4; // work neighborhood
+	traveler.nDayNeighborhood = get_rand_uint32 % 4; // work neighborhood
 	diff = commvec[destinationcomm].nLastPerson-commvec[destinationcomm].nFirstPerson;
 	if (diff>0) {
 	  // assign a host family to the traveler
-	  Person &host = pvec[commvec[destinationcomm].nFirstPerson + (gen_rand32() % diff)];
+	  Person &host = pvec[commvec[destinationcomm].nFirstPerson + (get_rand_uint32 % diff)];
 	  traveler.family = host.family;
 	  traveler.householdcluster = host.householdcluster;
 	  traveler.nHomeNeighborhood = host.nHomeNeighborhood;
 	  if (isWorkingAge(traveler) && commvec[destinationcomm].nNumWorkGroups>0)
-	    traveler.nWorkplace = 1 + (gen_rand32() % commvec[destinationcomm].nNumWorkGroups);
+	    traveler.nWorkplace = 1 + (get_rand_uint32 % commvec[destinationcomm].nNumWorkGroups);
 	  else
 	    traveler.nWorkplace = 0;
 	}
@@ -2067,19 +2261,19 @@ void EpiModel::travel_start(void) {
 	    traveler.nDayComm = tractvec[traveler.nDayTract-nFirstTract].nFirstCommunity;
 	    int diff = tractvec[traveler.nDayTract-nFirstTract].nLastCommunity-tractvec[traveler.nDayTract-nFirstTract].nFirstCommunity;
 	    if (diff>1)
-	      traveler.nDayComm += gen_rand32() % diff;
+	      traveler.nDayComm += get_rand_uint32 % diff;
 	    traveler.nHomeComm = traveler.nDayComm;
-	    traveler.nDayNeighborhood = gen_rand32() % 4; // work neighborhood
+	    traveler.nDayNeighborhood = get_rand_uint32 % 4; // work neighborhood
 
 	    // assign a host "family member"
 	    diff = commvec[traveler.nDayComm].nLastPerson-commvec[traveler.nDayComm].nFirstPerson;
 	    if (diff>0) {
-	      Person &host = pvec[commvec[traveler.nDayComm].nFirstPerson + (gen_rand32() % diff)];
+	      Person &host = pvec[commvec[traveler.nDayComm].nFirstPerson + (get_rand_uint32 % diff)];
 	      traveler.family = host.family;
 	      traveler.family = host.householdcluster;
 	      traveler.nHomeNeighborhood = host.nHomeNeighborhood;
 	      if (isWorkingAge(traveler) && commvec[traveler.nDayComm].nNumWorkGroups>0)
-		traveler.nWorkplace = 1 + gen_rand32() % commvec[traveler.nDayComm].nNumWorkGroups;
+		traveler.nWorkplace = 1 + get_rand_uint32 % commvec[traveler.nDayComm].nNumWorkGroups;
 	      else
 		traveler.nWorkplace = 0;
 	    }
@@ -2329,7 +2523,7 @@ void EpiModel::response(void) {
 		 (whichVaccine(p)==vacnum &&
 		  (p.vday>=VaccineData[vacnum].nBoostDay ||
 		   (needsBoost(p) && p.vday>=defaultboostday))))) {
-	      if (vFrac>=1.0 || genrand_real1() < vFrac) {
+	      if (vFrac>=1.0 || get_rand_double < vFrac) {
 		if (needsBoost(p) && VaccineData[vacnum].nNumDoses>1)
 		  clearNeedsBoost(p);
 		nNumVaccineDosesUsed[vacnum]++;
@@ -2384,7 +2578,7 @@ void EpiModel::response(void) {
        it != pend;
        it++) {
     Person &p = *it;
-    if (p.bWantAV && (uAVFraction==UINT_MAX || gen_rand32()<uAVFraction)) {
+    if (p.bWantAV && (uAVFraction==UINT_MAX || get_rand_uint32<uAVFraction)) {
       p.bWantAV = false;
       setAntiviral(p);
 #ifdef PARALLEL
@@ -2490,6 +2684,7 @@ void EpiModel::sync(void) {
 	      assert(p.age<TAG);
 	      ++commvec[p.nHomeComm].ninf[p.age];
 	      ++commvec[p.nHomeComm].nEverInfected[p.age];
+		  ++commvec[p.nHomeComm].nNewlyInfected[p.age];
 	      p.nInfectedTime = nTimer;
 	    }
 	    p.status = pdat->status;
@@ -2634,19 +2829,29 @@ void EpiModel::log(void) {
     Tract& t = *it;
     out << int(nTimer/2) << "," << t.id;
     int nsym[TAG],      // current symptomatic prevalence
-      ncsym[TAG];	// cumulative symptomatic attack rate
+      ncsym[TAG],	// cumulative symptomatic attack rate
+	  nNewInf[TAG],	// current newly infected
+	  nEverInf[TAG];	// number ever infected (cumulative newly infected)
     memset(nsym, 0, sizeof(int)*TAG);
     memset(ncsym, 0, sizeof(int)*TAG);
+	memset(nNewInf, 0, sizeof(int)*TAG);
+	memset(nEverInf, 0, sizeof(int)*TAG);
     for (unsigned int i=t.nFirstCommunity; i<t.nLastCommunity; i++) {
       for (int j=0; j<TAG; j++) {
 	nsym[j] += commvec[i].nsym[j];
 	ncsym[j] += commvec[i].nEverSymptomatic[j];
+	nNewInf[j] += commvec[i].nNewlyInfected[j];
+	nEverInf[j] += commvec[i].nEverInfected[j];
       }
     }
     for (int j=0; j<TAG; j++)
       out << "," << nsym[j];
     for (int j=0; j<TAG; j++)
       out << "," << ncsym[j];
+    for (int j=0; j<TAG; j++)
+      out << "," << nNewInf[j];
+    for (int j=0; j<TAG; j++)
+      out << "," << nEverInf[j];
     out << endl;
   }
 
@@ -2736,9 +2941,10 @@ void EpiModel::summary(void) {
       outfile << "Seeded daily" << endl;
     else
       outfile << "Seeded once" << endl;
-    outfile << "Pre-existing immunity by age: ";
+    outfile << "Pre-existing immunity level: " << fPreexistingImmunityLevel << endl;
+    outfile << "Pre-existing immunity fraction by age: ";
     for (int i=0; i<TAG; i++)
-      outfile << fPreexistingImmunityByAge[i] << ",";
+      outfile << fPreexistingImmunityFraction[i] << ",";
     outfile << endl;
     outfile << "Baseline VES by age: ";
     for (int i=0; i<TAG; i++)
@@ -3130,7 +3336,7 @@ void EpiModel::outputIndividuals(void) {
     ostringstream out;
 #else
     ostream &out = *individualsfile;
-    out << "id,age,familyid,homecomm,homeneighborhood,daycomm,dayneighborhood,workplace,infectedtime,sourceid,sourcetype" << endl;
+    out << "id,age,familyid,homecomm,homeneighborhood,daycomm,dayneighborhood,workplace,infectedtime,sourceid,sourcetype,vacstatus" << endl;
 #endif
     for (vector< Person >::iterator it = pvec.begin();
        it != pvec.end();
@@ -3143,7 +3349,7 @@ void EpiModel::outputIndividuals(void) {
 	  << p.id << "," << (int)p.age << "," << p.family << ","
 	  << p.nHomeComm << "," << (int)p.nHomeNeighborhood << "," 
 	  << p.nDayComm <<  "," << (int)p.nDayNeighborhood << "," << (int)p.nWorkplace << "," 
-	<< p.nInfectedTime << "," << p.sourceid << "," << (int) p.sourcetype << endl;
+	<< p.nInfectedTime << "," << p.sourceid << "," << (int) p.sourcetype << "," <<  (int) isVaccinated(p) << endl; 
     }
 
 #ifdef PARALLEL
@@ -3193,8 +3399,8 @@ void EpiModel::seedinfected(void) {
 	  for (int i=0; i<nSeedInfectedNumber; i++) { // infect people in this tract
 	    long c = t.nFirstCommunity;
 	    if (t.nLastCommunity-t.nFirstCommunity>1)
-	      c += gen_rand32() % (t.nLastCommunity-t.nFirstCommunity);
-	    long pid = commvec[c].nFirstPerson + gen_rand32() % commvec[c].nNumResidents;
+	      c += get_rand_uint32 % (t.nLastCommunity-t.nFirstCommunity);
+	    long pid = commvec[c].nFirstPerson + get_rand_uint32 % commvec[c].nNumResidents;
 	    infect(pvec[pid]);
 	    pvec[pid].sourcetype = FROMSEED;
 #ifdef PARALLEL
@@ -3213,7 +3419,7 @@ void EpiModel::seedinfected(void) {
       if (!rank) {
 	// node 0 picks people to infect and broadcasts the results
 	for (int i=0; i<nSeedInfectedNumber; i++)
-	  pids[i] = gen_rand32() % nNumPeopleTotal;
+	  pids[i] = get_rand_uint32 % nNumPeopleTotal;
       }
       MPI::COMM_WORLD.Bcast(pids, nSeedInfectedNumber, MPI::UNSIGNED, 0);
       unsigned int offset=0;
@@ -3235,7 +3441,7 @@ void EpiModel::seedinfected(void) {
 #else
       // seed infected people across whole population
       for (int i=0; i<nSeedInfectedNumber; i++) { // infect people
-	long pid = gen_rand32() % nNumPerson;
+	long pid = get_rand_uint32 % nNumPerson;
 	if (isSusceptible(pvec[pid])) {
 	  infect(pvec[pid]);
 	  pvec[pid].sourcetype = FROMSEED;
@@ -3244,7 +3450,6 @@ void EpiModel::seedinfected(void) {
 #endif
     }
   }
-
   // airport seeding is independent of other seeding
   if (nSeedAirports>0) {
     for (vector< Tract >::iterator it = tractvec.begin();
@@ -3263,7 +3468,7 @@ void EpiModel::seedinfected(void) {
 	  
 	  int num = bnldev(nSeedAirports/(float)10000, Size_hubs[hub]/365);
 	  for (int i=num; i>0; i--) { // infect people in this county
-	    unsigned long pid = nFirst + gen_rand32() % nRange;
+	    unsigned long pid = nFirst + get_rand_uint32 % nRange;
 	    assert(pid<pvec.size());
 	    infect(pvec[pid]);
 	    pvec[pid].sourcetype = FROMAIRPORT;
@@ -3306,7 +3511,7 @@ void EpiModel::prerun(void) {
       Person &p = *it;
       if (p.nVaccinePriority>0 &&
 	  (ePrevaccinationStrategy!=PRIMEBOOSTRANDOM ||
-	   (ePrevaccinationStrategy==PRIMEBOOSTRANDOM && genrand_real1()<fVaccinationFraction)))
+	   (ePrevaccinationStrategy==PRIMEBOOSTRANDOM && get_rand_double<fVaccinationFraction)))
 	p.bWantVac=true;
     }
     for (int vacnum=0; vacnum<nNumVaccineTypes; vacnum++)
@@ -3339,7 +3544,7 @@ void EpiModel::prerun(void) {
 		 it++) {
 	      Person &p = *it;
 	      if (p.bWantVac && p.bVaccineEligible[vacnum] && p.nVaccinePriority>0) {
-		if (vFrac>=1.0 || genrand_real1() < vFrac) {
+		if (vFrac>=1.0 || get_rand_double < vFrac) {
 		  p.bWantVac = false;
 		  if (nVaccineSupply[vacnum]>=nDoses)
 		    nVaccineSupply[vacnum]-=nDoses;
@@ -3377,7 +3582,7 @@ void EpiModel::prerun(void) {
       Person &p = *it;
       p.bWantVac = false;
       if ((ePrevaccinationStrategy==PRIMEBOOSTSAME && !isVaccinated(p)) || // only vaccinated people will get a boost
-	  (ePrevaccinationStrategy==PRIMEBOOSTRANDOM && genrand_real1()>=fVaccinationFraction)) // random people will get a dose
+	  (ePrevaccinationStrategy==PRIMEBOOSTRANDOM && get_rand_double>=fVaccinationFraction)) // random people will get a dose
 	p.nVaccinePriority = 0;
     }
 #ifdef PARALLEL
@@ -3400,8 +3605,19 @@ void EpiModel::run(void) {
   sync();
 #endif
   while(nTimer<nRunLength*2) {
-    if (nLogFileInterval>0 && (int)(nTimer/2)%nLogFileInterval==0)
-      log();
+    if (nLogFileInterval>0 && (int)(nTimer/2)%nLogFileInterval==0) {
+	  log();
+	  
+	      for (vector< Community >::iterator it = commvec.begin();
+			it != commvec.end();
+			it++) {
+	       for (int j=0; j<TAG; j++) {
+	  
+			(*it).nNewlyInfected[j] = 0; // reset the number newly infected
+	  
+			}
+	 }
+	}
     if (bSeedDaily) {
       seedinfected();
 #ifdef PARALLEL
