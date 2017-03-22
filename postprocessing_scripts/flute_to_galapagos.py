@@ -17,7 +17,8 @@ def add_to_output(out, simulator_time, tract_id, age_ranges, disease_state, infe
         out.write(','.join(out_row) + '\n')
 
 if len(sys.argv) < 2:
-    print('USAGE\n    python %s [input file]\n    python %s [input file] [log file]' % (os.path.basename(__file__), os.path.basename(__file__)))
+    basename = os.path.basename(__file__)
+    print('USAGE\n    python %s [input file]\n    python %s [input file] [log file]' % (basename, basename))
 else:
     filepath = sys.argv[1]
     try:
