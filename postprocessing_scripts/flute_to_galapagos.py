@@ -1,8 +1,18 @@
 """ flute_to_galapagos: Convert FluTE output to Galapagos readable format.
     
+    DESCRIPTION
+        This program converts FluTE LogX output files into Galapagos format.
+
     USAGE
         python flute_to_galapagos.py [input file]
         python flute_to_galapagos.py [input file] [log file]
+
+    INPUT
+        input file - The input file should be a LogX file (e.g. Log2) produced by FluTE
+        log file - If provided, the log file will contain information useful for debugging
+
+    OUTPUT
+        The program outputs a CSV file that can be uploaded and read by Galapagos
 """
 
 import sys
@@ -18,7 +28,11 @@ def add_to_output(out, simulator_time, tract_id, age_ranges, disease_state, infe
 
 if len(sys.argv) < 2:
     basename = os.path.basename(__file__)
-    print('USAGE\n    python %s [input file]\n    python %s [input file] [log file]' % (basename, basename))
+    print('DESCRIPTION\n    This program converts FluTE LogX output files into Galapagos format.\n')
+    print('USAGE\n    python %s [input file]\n    python %s [input file] [log file]\n' % (basename, basename))
+    print('INPUT\n    input file - The input file should be a LogX file (e.g. Log2) produced by FluTE\n' +
+        '    log file - If provided, the log file will contain information useful for debugging\n')
+    print('OUTPUT\n    The program outputs a CSV file that can be uploaded and read by Galapagos\n')
 else:
     filepath = sys.argv[1]
     try:
