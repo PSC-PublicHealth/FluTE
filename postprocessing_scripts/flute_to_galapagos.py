@@ -47,7 +47,7 @@ else:
     if len(sys.argv) == 3:
         logfile = sys.argv[2]
         outlog = open(logfile, 'a')
-        outlog.write('galapagos_%s\n' % filename)
+        outlog.write('galapagos_%s.csv\n' % filename)
         outlog.write('--------------------------\n')
 
     flute_data = []
@@ -58,7 +58,7 @@ else:
     total_rows = len(flute_data)
 
     age_ranges = ['0-4', '5-18', '19-29', '30-64', '65+']
-    with open('galapagos_' + filename, 'w+') as out:
+    with open('galapagos_' + filename + '.csv', 'w+') as out:
         out.write('simulator_time,location,age_range,disease_state,infection_state,count\n')
         for row in flute_data:
             simulator_time = row[0]
